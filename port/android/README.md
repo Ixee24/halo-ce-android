@@ -211,6 +211,13 @@ bitmap is selected from the current map and fills the entire widescreen area.
   displayed states follow the existing engine acknowledgement path. Cheats
   require an active player; network clients retain the host's existing rules.
   Available spawned objects depend on the current map.
+- **Maps & Mods** (main menu only) lists the custom maps in `custom_maps`
+  beside `maps`. **Import map** copies a Halo Custom Edition map (`.map`)
+  chosen with Android's document picker there, where the level lists pick it
+  up; tapping a listed map offers **Rename** and **Delete**. `bitmaps.map`,
+  `sounds.map` and `loc.map` are marked **[shared]**: every custom map reads
+  its tags from that one copy, so replacing one affects them all (and at
+  least one copy must be present for any custom map to load).
 
 All mobile controls now use original cyan vector HUD icons instead of text.
 **Camera mode** switches between first-person, flying and following cameras
@@ -396,7 +403,9 @@ The guest is the game, the platform layer and a small runtime:
    AArch64 target of clang. The options `-U__APPLE__` and
    `-fno-define-target-os-macros` hide the Darwin environment.
 2. `tools/android_asm_convert.py` changes the Mach-O assembly to ELF
-   assembly.
+   assembly. It renames symbols, but keeps string literals (`.ascii`,
+   `.asciz`) byte for byte: they hold tables as well as text
+   (`tools/test_android_asm_convert.py`).
 3. The AArch64 assembler makes the objects.
 4. `ld.lld` links the objects with `guest/guest.ld` to a static image,
    `build/android/halo_guest.elf`, at a fixed address above the Xbox memory

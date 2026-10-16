@@ -478,7 +478,96 @@ public final class TouchControls extends View implements SensorEventListener {
 
     private boolean menusActive = true;
     private int menuContext, menuPage, selectedControl, revision, currentFps;
+    private final java.util.ArrayList<String> mapNames = new java.util.ArrayList<>();
+    private String selectedMap;
+    private static final int MAX_MAP_ROWS = 60;
     private static native int[] nativeMenuPoll();
+    /** File name for an imported custom map, or null: the picker's leaf name kept as name.map with at most 51 stem characters (longer names never reach the engine's level lists). */
+    static String sanitizeMapName(String name) {
+        if (name == null) return null;
+        int slash = Math.max(name.lastIndexOf('/'), name.lastIndexOf('\\'));
+        String leaf = (slash >= 0 ? name.substring(slash+1) : name).trim();
+        if (leaf.length() < 5 || !leaf.regionMatches(true, leaf.length()-4, ".map", 0, 4)) return null;
+        String stem = leaf.substring(0, leaf.length()-4);
+        StringBuilder kept = new StringBuilder();
+        for (int i = 0; i < stem.length() && kept.length() < 51; i++) {
+            char c = stem.charAt(i);
+            kept.append(Character.isLetterOrDigit(c) || c == ' ' || c == '_' || c == '-' || c == '.'
+                || c == '(' || c == ')' ? c : '_');
+        }
+        while (kept.length() > 0 && (kept.charAt(kept.length()-1) == ' ' || kept.charAt(kept.length()-1) == '.'))
+            kept.setLength(kept.length()-1);
+        while (kept.length() > 0 && kept.charAt(0) == ' ') kept.deleteCharAt(0);
+        if (kept.length() == 0) return null;
+        return kept+".map";
+    }
+    private java.io.File mapsDirectory() {
+        android.content.Context context = getContext();
+        java.io.File root = context == null ? null : context.getExternalFilesDir(null);
+        return root == null ? null : new java.io.File(root, "custom_maps");
+    }
+    /** Custom Edition's shared resource maps: every custom map's tags are read from these, so one copy serves (and affects) all of them. */
+    static boolean isResourceMapName(String name) {
+        return name != null && (name.equalsIgnoreCase("bitmaps.map")
+            || name.equalsIgnoreCase("sounds.map") || name.equalsIgnoreCase("loc.map"));
+    }
+    private void refreshMapList() {
+        mapNames.clear();
+        java.io.File directory = mapsDirectory();
+        java.io.File[] files = directory == null ? null : directory.listFiles();
+        if (files == null) return;
+        for (java.io.File file : files) {
+            String name = file.getName();
+            if (file.isFile() && name.length() >= 5 && name.regionMatches(true, name.length()-4, ".map", 0, 4))
+                mapNames.add(name);
+        }
+        java.util.Collections.sort(mapNames, String.CASE_INSENSITIVE_ORDER);
+        while (mapNames.size() > MAX_MAP_ROWS) mapNames.remove(mapNames.size()-1);
+    }
+    /** After an import, rename or delete: show the list again with a notice. */
+    public void onMapsChanged(String message) {
+        refreshMapList();
+        if (menuPage == 15 || menuPage == 16) menuPage = 15;
+        revision++; publishMenu(); invalidate();
+        if (message != null) Toast.makeText(getContext(), message, Toast.LENGTH_LONG).show();
+    }
+    private void renameSelectedMap(String stem) {
+        if (selectedMap == null) return;
+        String clean = sanitizeMapName(stem+".map");
+        java.io.File directory = mapsDirectory();
+        if (clean == null || directory == null) {
+            Toast.makeText(getContext(), "That name cannot be used for a map.", Toast.LENGTH_LONG).show();
+            return;
+        }
+        if (!clean.equalsIgnoreCase(selectedMap)) {
+            boolean taken = false;
+            for (int i = 0; i < mapNames.size(); i++)
+                taken |= mapNames.get(i).equalsIgnoreCase(clean);
+            if (taken) {
+                Toast.makeText(getContext(), "A map named "+clean+" already exists.", Toast.LENGTH_LONG).show();
+                return;
+            }
+            if (!new java.io.File(directory, selectedMap).renameTo(new java.io.File(directory, clean))) {
+                Toast.makeText(getContext(), "Cannot rename "+selectedMap+".", Toast.LENGTH_LONG).show();
+                return;
+            }
+            selectedMap = clean;
+            refreshMapList(); menuPage = 15;
+            revision++; publishMenu(); invalidate();
+            Toast.makeText(getContext(), "Renamed to "+clean+"."
+                +(isResourceMapName(clean) ? " It is shared by all custom maps." : ""), Toast.LENGTH_LONG).show();
+        } else { menuPage = 15; revision++; publishMenu(); invalidate(); }
+    }
+    private void deleteSelectedMap() {
+        String name = selectedMap;
+        boolean gone = false;
+        if (name != null) {
+            java.io.File directory = mapsDirectory();
+            gone = directory != null && new java.io.File(directory, name).delete();
+        }
+        selectedMap = null; menuPage = 15;
+        onMapsChanged(name == null ? null : gone ? "Deleted "+name+"." : "Cannot delete "+name+".");
+    }
     private static native void nativeMenuPointer(float x, float y, boolean click, boolean back, float scroll, boolean scrollbar);
     private static native void nativeMenuPublish(int revision, int page, boolean editing,
         String title, String[] labels, int[] actions, int[] values);
@@ -532,7 +621,11 @@ public final class TouchControls extends View implements SensorEventListener {
             if (action == 90) exitHudEditing();
             return;
         }
-        if (action >= 3000) {
+        if (action >= 4000) {
+            int id = action-4000;
+            if (id < 0 || id >= mapNames.size()) return;
+            selectedMap = mapNames.get(id); menuPage = 16;
+        } else if (action >= 3000) {
             int id = action-3000;
             if (id < 0 || id >= CHEATS.length) return;
             if (menuContext == 1) {
@@ -562,7 +655,32 @@ public final class TouchControls extends View implements SensorEventListener {
             else if (menuPage == 5 || menuPage == 13) menuPage = 3;
             else if (menuPage == 9 || menuPage == 10 || menuPage == 11) menuPage = 7;
             else if (menuPage == 12) menuPage = 8;
+            else if (menuPage == 15) menuPage = 1;
+            else if (menuPage == 16) menuPage = 15;
             else menuPage = 2;
+        } else if (action == 50) {
+            android.content.Context context = getContext();
+            if (context instanceof HaloActivity) ((HaloActivity) context).importMapFile();
+            else Toast.makeText(context, "Import is unavailable here.", Toast.LENGTH_LONG).show();
+        } else if (action == 51) {
+            if (selectedMap == null) menuPage = 15;
+            else {
+                String stem = selectedMap.substring(0, selectedMap.length()-4);
+                final android.widget.EditText input = new android.widget.EditText(getContext());
+                input.setText(stem); input.setSingleLine();
+                new android.app.AlertDialog.Builder(getContext()).setTitle("Rename map")
+                    .setView(input)
+                    .setNegativeButton("Cancel", null)
+                    .setPositiveButton("Rename", (dialog, which) -> renameSelectedMap(input.getText().toString()))
+                    .show();
+            }
+        } else if (action == 52) {
+            if (selectedMap == null) menuPage = 15;
+            else new android.app.AlertDialog.Builder(getContext()).setTitle("Delete map")
+                .setMessage("Delete "+selectedMap+" from custom_maps?")
+                .setNegativeButton("Cancel", null)
+                .setPositiveButton("Delete", (dialog, which) -> deleteSelectedMap())
+                .show();
         } else if (action == 12) { layout.overlayDisabled = false; saveLayout(); editing = true; visible = true; reset(); updateSensors(); }
         else if (action == 14) { hudEditing = true; editing = true; reset(); updateSensors(); }
         else if (action == 33) { layout.overlayDisabled = !layout.overlayDisabled; reset(); saveLayout(); }
@@ -623,6 +741,7 @@ public final class TouchControls extends View implements SensorEventListener {
         String title = "Porting options";
         if (menuPage == 1) {
             row.accept("Overlay settings", 2); row.accept("General", 3); row.accept("Cheats", 6);
+            if (menuContext == 1) row.accept("Maps & Mods", 15);
         } else if (menuPage == 2) {
             title = "Overlay settings";
             row.accept("Edit buttons layout", 12); row.accept("Hide or add buttons", 7);
@@ -671,6 +790,18 @@ public final class TouchControls extends View implements SensorEventListener {
             for (int i = 0; i < TouchLayout.BASE_COUNT; i++) row.accept(controlName(i), 2000+i);
         } else if (menuPage == 11) {
             title = "Restore defaults and remove copies?"; row.accept("Reset all buttons", 22);
+        } else if (menuPage == 15) {
+            title = "Maps & Mods";
+            refreshMapList();
+            row.accept("Import map", 50);
+            for (int i = 0; i < mapNames.size(); i++)
+                row.accept(mapNames.get(i)+(isResourceMapName(mapNames.get(i)) ? " [shared]" : ""), 4000+i);
+        } else if (menuPage == 16) {
+            refreshMapList();
+            if (selectedMap != null && mapNames.contains(selectedMap)) {
+                title = selectedMap;
+                row.accept("Rename", 51); row.accept("Delete", 52);
+            } else title = "Maps & Mods";
         }
         if (menuPage != 0) row.accept("Back", 90);
         int[] ids = new int[actions.size()], progress = new int[values.size()];
