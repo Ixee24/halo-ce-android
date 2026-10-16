@@ -336,6 +336,9 @@ static void *game_main(void *unused)
 	/* readable by adb (the shell user), for managing saves */
 	mkdir(save_root, 0775);
 	share_save_tree(save_root);
+	/* custom maps beside maps (the engine's d:\custom_maps\): imported from Porting options */
+	snprintf(path, sizeof(path), "%s/custom_maps", data_root);
+	mkdir(path, 0775);
 	if (!directory_has_maps(data_root))
 	{
 		host_fatal("The Halo game data was not found.\n\nCopy the PAL game data (build 01.01.14.2342), "

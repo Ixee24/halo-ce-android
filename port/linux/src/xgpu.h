@@ -21,7 +21,7 @@ struct xgpu_capabilities
 	BOOL border_clamp;
 	BOOL anisotropy;
 	BOOL s3tc;
-	/* ES 3.2: glDrawElementsBaseVertex */
+	/* ES 3.2, or the EXT/OES_draw_elements_base_vertex extension: glDrawElementsBaseVertex */
 	BOOL base_vertex;
 	/* ES 3.1 with fragment atomic counters: exact visibility test counts */
 	BOOL atomic_counters;
@@ -146,6 +146,11 @@ struct nv2a_pixel_shader_key
 	proportion to how far alpha is past the reference, not all of the pixel
 	or none of it, so that cut-out edges (foliage, grates) are smoothed too */
 	unsigned char alpha_test_samples;
+	/* the source's blend factor, applied here instead (1 the blend color, 2
+	one less it, 3 its alpha, 4 one less that; 0 none): WebGL refuses a
+	blend of a constant color factor with a constant alpha one, as the
+	meters' (shader_transparent_meter) */
+	unsigned char source_blend;
 };
 
 char *nv2a_pixel_shader_to_glsl(const struct nv2a_pixel_shader_key *key);

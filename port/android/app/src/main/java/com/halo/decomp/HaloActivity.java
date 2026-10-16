@@ -38,7 +38,7 @@ public class HaloActivity extends SDLActivity {
     private volatile int[] gestureInsets = new int[] { 0, 0, 0, 0 };
     /** the on-screen touch controls, over SDL's surface */
     private TouchControls touchControls;
-    private static final int EXPORT_LAYOUT = 401, IMPORT_LAYOUT = 402;
+    private static final int EXPORT_LAYOUT = 401, IMPORT_LAYOUT = 402, IMPORT_MAP = 403;
     private String pendingLayoutExport;
 
     @Override
@@ -99,8 +99,13 @@ public class HaloActivity extends SDLActivity {
 
     @Override
     protected void onActivityResult(int request, int result, Intent data) {
-        if (request != EXPORT_LAYOUT && request != IMPORT_LAYOUT) {
-            super.onActivityResult(request, result, data);
+if (request != EXPORT_LAYOUT && request != IMPORT_LAYOUT && request != IMPORT_MAP) {
+            super.onActivityResult(request, result, data); return;
+        }
+        if (request == IMPORT_MAP) {
+            if (result != RESULT_OK || data == null || data.getData() == null) return;
+            Uri document = data.getData();
+            new Thread(() -> importMap(document), "halo-map-import").start();
             return;
         }
         String exported = pendingLayoutExport;
@@ -158,6 +163,102 @@ public class HaloActivity extends SDLActivity {
                 layoutFileError(e);
             }
         });
+    }
+
+    /** SAF lets the player choose a map file without storage permissions; it is copied to custom_maps. */
+    public void importMapFile() {
+        new AlertDialog.Builder(this).setTitle("Import map")
+            .setMessage("Choose a Halo Custom Edition map (.map). It is copied to custom_maps beside maps and appears in the level lists.")
+            .setNegativeButton("Cancel", null)
+            .setPositiveButton("Choose file", (dialog, which) -> {
+                Intent intent = new Intent(Intent.ACTION_OPEN_DOCUMENT);
+                intent.addCategory(Intent.CATEGORY_OPENABLE);
+                intent.setType("*/*");
+                try { startActivityForResult(intent, IMPORT_MAP); }
+                catch (android.content.ActivityNotFoundException e) {
+                    Toast.makeText(this, "No document picker is available.", Toast.LENGTH_LONG).show();
+                }
+            }).show();
+    }
+
+    private void importMap(Uri document) {
+        String name = TouchControls.sanitizeMapName(queryDisplayName(document));
+        if (name == null) {
+            notifyMapsChanged("That is not a .map file.");
+            return;
+        }
+        if (TouchControls.isResourceMapName(name)) {
+            runOnUiThread(() -> {
+                if (isFinishing() || isDestroyed()) return;
+                new AlertDialog.Builder(this).setTitle("Shared resource map")
+                    .setMessage(name+" is shared by every custom map: importing replaces the copy all of them use. Import it?")
+                    .setNegativeButton("Cancel", null)
+                    .setPositiveButton("Import", (dialog, which) ->
+                        new Thread(() -> copyImportedMap(document, name), "halo-map-import").start())
+                    .show();
+            });
+            return;
+        }
+        new Thread(() -> copyImportedMap(document, name), "halo-map-import").start();
+    }
+
+    private void notifyMapsChanged(String message) {
+        runOnUiThread(() -> {
+            if (isFinishing() || isDestroyed()) return;
+            if (touchControls != null) touchControls.onMapsChanged(message);
+            else Toast.makeText(this, message, Toast.LENGTH_LONG).show();
+        });
+    }
+
+    private void copyImportedMap(Uri document, String name) {
+        java.io.File root = getExternalFilesDir(null);
+        String message;
+        if (root == null) {
+            message = "Game storage is unavailable.";
+        } else {
+            java.io.File directory = new java.io.File(root, "custom_maps");
+            java.io.File finalFile = new java.io.File(directory, name);
+            boolean replaced = finalFile.isFile();
+            message = copyMapDocument(document, directory, finalFile, replaced ? "Replaced " : "Imported ");
+            if (TouchControls.isResourceMapName(name))
+                message += " It is shared by all custom maps.";
+        }
+        notifyMapsChanged(message);
+    }
+
+    private String copyMapDocument(Uri document, java.io.File directory, java.io.File finalFile, String done) {
+        java.io.File partial = new java.io.File(directory, finalFile.getName()+".partial");
+        try {
+            if (!directory.isDirectory() && !directory.mkdirs())
+                throw new java.io.IOException("Cannot create custom_maps");
+            try (InputStream input = getContentResolver().openInputStream(document)) {
+                if (input == null) throw new java.io.IOException("Cannot open map file");
+                try (OutputStream output = new java.io.FileOutputStream(partial)) {
+                    byte[] buffer = new byte[1048576]; int size;
+                    while ((size = input.read(buffer)) != -1) output.write(buffer, 0, size);
+                }
+            }
+            if (finalFile.isFile() && !finalFile.delete())
+                throw new java.io.IOException("Cannot replace "+finalFile.getName());
+            if (!partial.renameTo(finalFile))
+                throw new java.io.IOException("Cannot install "+finalFile.getName());
+            return done+finalFile.getName()+".";
+        } catch (Exception e) {
+            partial.delete();
+            return "Could not import map: "+e.getMessage();
+        }
+    }
+
+    private String queryDisplayName(Uri document) {
+        try (android.database.Cursor cursor = getContentResolver().query(document,
+                new String[]{android.provider.OpenableColumns.DISPLAY_NAME}, null, null, null)) {
+            if (cursor != null && cursor.moveToFirst()) {
+                String name = cursor.getString(0);
+                if (name != null) return name;
+            }
+        } catch (Exception e) { /* fall through to the path segment */ }
+        String path = document.getLastPathSegment();
+        return path == null ? "" : path;
     }
 
     private void layoutFileError(Exception error) {

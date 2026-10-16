@@ -397,6 +397,9 @@ struct program_entry
 	GLint bump_matrix, bump_luminance, texture_scale;
 	GLint texture_lod_bias;
 	GLint screen_offset;
+	/* nv2a_pixel_shader_key's source_blend's color, and what it last had */
+	GLint blend_constant;
+	float blend_constant_value[4];
 	/* the lights of a draw lit for each pixel (XGPU_MODEL_LIGHT_COUNT), and
 	constants_serial at their last upload */
 	GLint model_lights;
@@ -546,6 +549,15 @@ struct gl_device
 	unsigned long stream_offset;
 	GLuint index_buffer;
 	unsigned long index_offset;
+#ifdef HALO_WEB
+	/* (web_chunk_get) the room in the stream and index buffers, the draws
+	made so far, and the count at each buffer's latest write */
+	unsigned long stream_capacity;
+	unsigned long index_capacity;
+	unsigned long draw_serial;
+	unsigned long stream_serial;
+	unsigned long index_serial;
+#endif
 	GLuint samplers[D3DTSS_MAXSTAGES];
 
 	GLuint queries[VISIBILITY_TEST_SLOTS];
@@ -794,6 +806,27 @@ void xgpu_gl_texture_deleted(unsigned int texture)
 				gl_state.textures[unit][slot] = (GLuint)-1;
 		}
 	}
+}
+
+/* the source blend factor the pixel shader applies (nv2a_pixel_shader_key's
+source_blend), when the draw's blend mixes a constant color factor with a
+constant alpha one, which WebGL refuses; 0 otherwise */
+static unsigned char source_blend_in_shader(void)
+{
+#ifdef HALO_WEB
+	DWORD source = D3D__RenderState[D3DRS_SRCBLEND], destination = D3D__RenderState[D3DRS_DESTBLEND];
+	int source_kind = source == D3DBLEND_CONSTANTCOLOR || source == D3DBLEND_INVCONSTANTCOLOR ? 1 :
+		source == D3DBLEND_CONSTANTALPHA || source == D3DBLEND_INVCONSTANTALPHA ? 2 : 0;
+	int destination_kind = destination == D3DBLEND_CONSTANTCOLOR || destination == D3DBLEND_INVCONSTANTCOLOR ? 1 :
+		destination == D3DBLEND_CONSTANTALPHA || destination == D3DBLEND_INVCONSTANTALPHA ? 2 : 0;
+
+	if (D3D__RenderState[D3DRS_ALPHABLENDENABLE] && source_kind && destination_kind && source_kind != destination_kind)
+	{
+		return source == D3DBLEND_CONSTANTCOLOR ? 1 : source == D3DBLEND_INVCONSTANTCOLOR ? 2 :
+			source == D3DBLEND_CONSTANTALPHA ? 3 : 4;
+	}
+#endif
+	return 0;
 }
 
 static void state_enable(unsigned char *shadow, GLenum capability, BOOL enabled)
@@ -1580,6 +1613,7 @@ static void gl_initialize(void)
 #ifdef HALO_GLES
 	{
 		BOOL es32 = major > 3 || (major == 3 && minor >= 2);
+		const char *base_vertex_source = es32 ? "core" : "none";
 
 		/* clip control is emulated in the vertex shader (nv2a_vsh.c) */
 		xgpu_capabilities.copy_image = es32 || host_gl_has_extension("GL_EXT_copy_image") ||
@@ -1587,7 +1621,26 @@ static void gl_initialize(void)
 		xgpu_capabilities.border_clamp = es32 || host_gl_has_extension("GL_EXT_texture_border_clamp") ||
 			host_gl_has_extension("GL_OES_texture_border_clamp");
 		xgpu_capabilities.anisotropy = host_gl_has_extension("GL_EXT_texture_filter_anisotropic");
-		xgpu_capabilities.base_vertex = es32;
+		/* ANGLE and many Android drivers report ES 3.0 or 3.1 and offer
+		glDrawElementsBaseVertex as an extension under another name; the renderer
+		calls the pointer it has, so it takes the extension's when the core one is
+		not there. One that cannot be loaded leaves the draws without a base vertex */
+		xgpu_capabilities.base_vertex = es32 && halo_glDrawElementsBaseVertex != NULL;
+		if (!xgpu_capabilities.base_vertex)
+		{
+			if (host_gl_has_extension("GL_EXT_draw_elements_base_vertex") && halo_glDrawElementsBaseVertexEXT)
+			{
+				halo_glDrawElementsBaseVertex = halo_glDrawElementsBaseVertexEXT;
+				xgpu_capabilities.base_vertex = TRUE;
+				base_vertex_source = "GL_EXT_draw_elements_base_vertex";
+			}
+			else if (host_gl_has_extension("GL_OES_draw_elements_base_vertex") && halo_glDrawElementsBaseVertexOES)
+			{
+				halo_glDrawElementsBaseVertex = halo_glDrawElementsBaseVertexOES;
+				xgpu_capabilities.base_vertex = TRUE;
+				base_vertex_source = "GL_OES_draw_elements_base_vertex";
+			}
+		}
 		xgpu_capabilities.shading_language = major > 3 || (major == 3 && minor >= 1) ? "310 es" : "300 es";
 		if (major > 3 || (major == 3 && minor >= 1))
 		{
@@ -1600,9 +1653,11 @@ static void gl_initialize(void)
 			(host_gl_has_extension("GL_EXT_texture_compression_dxt1") &&
 			host_gl_has_extension("GL_ANGLE_texture_compression_dxt3") &&
 			host_gl_has_extension("GL_ANGLE_texture_compression_dxt5"));
-		platform_log("OpenGL ES %d.%d: copy image %d, border clamp %d, anisotropy %d, S3TC %d, sample counting %d",
+		platform_log("OpenGL ES %d.%d: copy image %d, border clamp %d, anisotropy %d, S3TC %d, sample counting %d, "
+			"base vertex %d (%s)",
 			(int)major, (int)minor, xgpu_capabilities.copy_image, xgpu_capabilities.border_clamp,
-			xgpu_capabilities.anisotropy, xgpu_capabilities.s3tc, xgpu_capabilities.atomic_counters);
+			xgpu_capabilities.anisotropy, xgpu_capabilities.s3tc, xgpu_capabilities.atomic_counters,
+			xgpu_capabilities.base_vertex, base_vertex_source);
 	}
 #else
 	if (config_boolean("debug.gl_debug"))
@@ -2702,6 +2757,22 @@ static unsigned long hash_words(const void *data, unsigned long size)
 	return hash;
 }
 
+/* size is a multiple of 4. Every draw compares its pixel shader key and its
+uniforms' inputs (about 300 bytes each) with recent ones: the loop has no
+early exit, so that the compiler compares several words at once, where the
+C library's memcmp (the Windows build's) compares them one at a time */
+static BOOL words_equal(const void *a, const void *b, unsigned long size)
+{
+	const DWORD *words_a = a;
+	const DWORD *words_b = b;
+	DWORD difference = 0;
+	unsigned long index;
+
+	for (index = 0; index < size / 4; index++)
+		difference |= words_a[index] ^ words_b[index];
+	return difference == 0;
+}
+
 /* lit: the shader that hands the lighting's normal and position on
 (vertex_shader_object lit_shader) */
 static GLuint vertex_shader_get(struct vertex_shader_object *program, BOOL immediate, BOOL lit)
@@ -2751,14 +2822,14 @@ static GLuint fragment_shader_get(const struct nv2a_pixel_shader_key *key)
 
 	for (index = 0; index < RECENT_FRAGMENT_COUNT; index++)
 	{
-		if (recent[index] && !memcmp(&recent[index]->key, key, sizeof(*key)))
+		if (recent[index] && words_equal(&recent[index]->key, key, sizeof(*key)))
 			return recent[index]->shader;
 	}
 	hash = hash_words(key, sizeof(*key));
 	bucket = &fragment_buckets[hash % FRAGMENT_BUCKETS];
 	for (entry = *bucket; entry; entry = entry->next)
 	{
-		if (entry->hash == hash && !memcmp(&entry->key, key, sizeof(*key)))
+		if (entry->hash == hash && words_equal(&entry->key, key, sizeof(*key)))
 		{
 			recent[recent_next++ % RECENT_FRAGMENT_COUNT] = entry;
 			return entry->shader;
@@ -2865,6 +2936,7 @@ static struct program_entry *program_get(GLuint vertex_shader, GLuint fragment_s
 	entry->texture_scale = glGetUniformLocation(entry->program, "texture_scale");
 	entry->texture_lod_bias = glGetUniformLocation(entry->program, "texture_lod_bias");
 	entry->screen_offset = glGetUniformLocation(entry->program, "screen_offset");
+	entry->blend_constant = glGetUniformLocation(entry->program, "blend_constant");
 	entry->model_lights = glGetUniformLocation(entry->program, "model_lights");
 	for (stage = 0; stage < D3DTSS_MAXSTAGES; stage++)
 	{
@@ -3523,10 +3595,13 @@ static void apply_raster_state(BOOL has_depth)
 		GLenum equation = blend_equation(rs[D3DRS_BLENDOP]);
 		float blend_color[4];
 
-		if (gl_state.blend_source != (GLenum)rs[D3DRS_SRCBLEND] ||
+		/* (a constant factor the pixel shader applies: source_blend_in_shader) */
+		GLenum source = source_blend_in_shader() ? GL_ONE : (GLenum)rs[D3DRS_SRCBLEND];
+
+		if (gl_state.blend_source != source ||
 			gl_state.blend_destination != (GLenum)rs[D3DRS_DESTBLEND])
 		{
-			gl_state.blend_source = (GLenum)rs[D3DRS_SRCBLEND];
+			gl_state.blend_source = source;
 			gl_state.blend_destination = (GLenum)rs[D3DRS_DESTBLEND];
 			glBlendFunc(gl_state.blend_source, gl_state.blend_destination);
 		}
@@ -3759,6 +3834,7 @@ static struct program_entry *prepare_draw(BOOL immediate)
 		key.alpha_test_samples = (unsigned char)target_samples;
 #endif
 	key.fog_enable = D3D__RenderState[D3DRS_FOGENABLE] != 0;
+	key.source_blend = source_blend_in_shader();
 	key.fog_table_mode = (unsigned char)D3D__RenderState[D3DRS_FOGTABLEMODE];
 #ifdef HALO_GLES
 	key.count_samples = device.visibility_test_active && xgpu_capabilities.atomic_counters;
@@ -3792,8 +3868,22 @@ static struct program_entry *prepare_draw(BOOL immediate)
 		stats.immediate_draws++;
 	else
 		stats.draws++;
+#ifdef HALO_WEB
+	device.draw_serial++;
+#endif
 	draw_flush();
 	state_program(entry->program);
+	if (key.source_blend && entry->blend_constant >= 0)
+	{
+		float blend_constant[4];
+
+		color_to_vec4(D3D__RenderState[D3DRS_BLENDCOLOR], blend_constant);
+		if (memcmp(entry->blend_constant_value, blend_constant, sizeof(blend_constant)))
+		{
+			memcpy(entry->blend_constant_value, blend_constant, sizeof(blend_constant));
+			glUniform4fv(entry->blend_constant, 1, blend_constant);
+		}
+	}
 #ifdef HALO_GLES
 	if (key.count_samples)
 		glBindBufferRange(GL_ATOMIC_COUNTER_BUFFER, 0, device.visibility_counters,
@@ -3912,7 +4002,7 @@ static struct program_entry *prepare_draw(BOOL immediate)
 			inputs[count++] = state[D3DTSS_BUMPENVLOFFSET];
 			inputs[count++] = state[D3DTSS_MIPMAPLODBIAS];
 		}
-		if (!draw_uniforms_serial || memcmp(inputs, draw_uniform_inputs, sizeof(inputs)))
+		if (!draw_uniforms_serial || !words_equal(inputs, draw_uniform_inputs, sizeof(inputs)))
 		{
 			struct draw_uniforms *converted = &draw_uniforms;
 
@@ -4357,12 +4447,96 @@ static void index_extent(const WORD *indices, unsigned long count, unsigned long
 
 /* ---------- vertex data */
 
+#ifdef HALO_WEB
+/* port: WebGL on Metal (Chrome's and Safari's ANGLE) waits for the GPU to
+finish everything queued before it writes a buffer that a queued draw reads
+(without its shadow buffers, which Chrome leaves off): a glBufferSubData
+into the stream buffer after each draw was a wait for the GPU each draw,
+some 2000 a frame, the frame rate a few frames each second. So each draw's
+uploads go into a buffer of their own that no queued draw reads, taken from
+pools of a few sizes, one set for each frame of the ring: a buffer is
+written again only STREAM_BUFFER_RING frames on, when the GPU is done with
+it. */
+#define WEB_CHUNK_SHIFT 12 /* 4 KB */
+#define WEB_CHUNK_CLASSES 14 /* to 32 MB */
+
+static struct web_chunks
+{
+	GLuint *buffers;
+	unsigned long count;
+	unsigned long capacity;
+	unsigned long next;
+} web_chunks[2][STREAM_BUFFER_RING][WEB_CHUNK_CLASSES];
+
+/* a buffer of at least size bytes for this frame's vertices (index 0) or
+indices (index 1), bound, and its size */
+static GLuint web_chunk_get(int indices, unsigned long size, unsigned long *capacity)
+{
+	struct web_chunks *chunks;
+	int chunk_class = 0;
+	GLuint buffer;
+
+	while (chunk_class < WEB_CHUNK_CLASSES - 1 && (1UL << (WEB_CHUNK_SHIFT + chunk_class)) < size)
+		chunk_class++;
+	chunks = &web_chunks[indices][device.buffer_ring][chunk_class];
+	*capacity = 1UL << (WEB_CHUNK_SHIFT + chunk_class);
+	if (chunks->next == chunks->count)
+	{
+		if (chunks->count == chunks->capacity)
+		{
+			unsigned long grown_capacity = chunks->capacity ? chunks->capacity * 2 : 64;
+			GLuint *grown = realloc(chunks->buffers, grown_capacity * sizeof(*grown));
+
+			if (!grown)
+			{
+				/* (out of memory: the frame's own buffer, written as before) */
+				*capacity = indices ? INDEX_BUFFER_SIZE : STREAM_BUFFER_SIZE;
+				return indices ? device.index_buffers[device.buffer_ring] : device.stream_buffers[device.buffer_ring];
+			}
+			chunks->buffers = grown;
+			chunks->capacity = grown_capacity;
+		}
+		glGenBuffers(1, &chunks->buffers[chunks->count]);
+		buffer = chunks->buffers[chunks->count++];
+		if (indices)
+			state_element_array_buffer(buffer);
+		else
+			state_array_buffer(buffer);
+		glBufferData(indices ? GL_ELEMENT_ARRAY_BUFFER : GL_ARRAY_BUFFER, (GLsizeiptr)*capacity, NULL, GL_STREAM_DRAW);
+	}
+	return chunks->buffers[chunks->next++];
+}
+
+/* the ring's next frame: its buffers are free again */
+static void web_chunks_begin_frame(void)
+{
+	int indices, chunk_class;
+
+	for (indices = 0; indices < 2; indices++)
+	{
+		for (chunk_class = 0; chunk_class < WEB_CHUNK_CLASSES; chunk_class++)
+			web_chunks[indices][device.buffer_ring][chunk_class].next = 0;
+	}
+	device.stream_capacity = 0;
+	device.index_capacity = 0;
+}
+#endif
+
 /* makes room for size bytes of uploads, orphaning the stream buffer if it
 is full. A draw reserves room for all of its streams at once: orphaning
 between two of them would leave the attributes already pointed at the
 buffer reading its new, empty storage. */
 static void stream_reserve(unsigned long size)
 {
+#ifdef HALO_WEB
+	/* (a new buffer when a draw since the latest write may read this one) */
+	if (size && (device.stream_offset + size > device.stream_capacity ||
+		(device.stream_offset && device.stream_serial != device.draw_serial)))
+	{
+		device.stream_buffer = web_chunk_get(0, size, &device.stream_capacity);
+		device.stream_offset = 0;
+	}
+#else
 	if (device.stream_offset + size > STREAM_BUFFER_SIZE)
 	{
 		/* orphan the buffer and start again */
@@ -4370,6 +4544,7 @@ static void stream_reserve(unsigned long size)
 		glBufferData(GL_ARRAY_BUFFER, STREAM_BUFFER_SIZE, NULL, GL_STREAM_DRAW);
 		device.stream_offset = 0;
 	}
+#endif
 }
 
 static unsigned long stream_upload(const void *data, unsigned long size);
@@ -4398,6 +4573,9 @@ static unsigned long stream_upload(const void *data, unsigned long size)
 	host_gl_buffer_write(GL_ARRAY_BUFFER, (unsigned int)offset, (unsigned int)length, data);
 #else
 	buffer_upload(GL_ARRAY_BUFFER, offset, length, data);
+#endif
+#ifdef HALO_WEB
+	device.stream_serial = device.draw_serial;
 #endif
 	device.stream_offset += size;
 	return offset;
@@ -4454,17 +4632,31 @@ static unsigned long index_upload(const void *data, unsigned long size)
 	unsigned long length = size;
 
 	size = (size + 15) & ~15UL;
+#ifdef HALO_WEB
+	/* (as stream_reserve) */
+	if (device.index_offset + size > device.index_capacity ||
+		(device.index_offset && device.index_serial != device.draw_serial))
+	{
+		device.index_buffer = web_chunk_get(1, size, &device.index_capacity);
+		device.index_offset = 0;
+	}
+	state_element_array_buffer(device.index_buffer);
+#else
 	state_element_array_buffer(device.index_buffer);
 	if (device.index_offset + size > INDEX_BUFFER_SIZE)
 	{
 		glBufferData(GL_ELEMENT_ARRAY_BUFFER, INDEX_BUFFER_SIZE, NULL, GL_STREAM_DRAW);
 		device.index_offset = 0;
 	}
+#endif
 	offset = device.index_offset;
 #ifdef HALO_GLES
 	host_gl_buffer_write(GL_ELEMENT_ARRAY_BUFFER, (unsigned int)offset, (unsigned int)length, data);
 #else
 	buffer_upload(GL_ELEMENT_ARRAY_BUFFER, offset, length, data);
+#endif
+#ifdef HALO_WEB
+	device.index_serial = device.draw_serial;
 #endif
 	device.index_offset += size;
 	return offset;
@@ -5771,6 +5963,9 @@ void WINAPI D3DDevice_Present(CONST RECT *source_rectangle, CONST RECT *destinat
 		device.index_buffer = device.index_buffers[device.buffer_ring];
 		device.stream_offset = 0;
 		device.index_offset = 0;
+#ifdef HALO_WEB
+		web_chunks_begin_frame();
+#endif
 #else
 		device.stream_offset = STREAM_BUFFER_SIZE; /* orphan next frame */
 		device.index_offset = INDEX_BUFFER_SIZE;
