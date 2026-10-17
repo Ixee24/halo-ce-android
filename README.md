@@ -103,6 +103,16 @@ Older exports remain supported; missing FOV and overlay settings default to
 from layout exports. Phone rumble, gyro and final GPU presentation require
 verification on Android hardware.
 
+## Mods
+
+The main menu's **Mods** plays client-side mods over the maps' own tags, on
+your device only, in any game: folders of Halo PC tag files in `mods/` under
+`/sdcard/Android/data/com.halo.decomp/files/`, each with a `mod.toml`
+(texture, sound and text packs). Every mod in the folder is on; the menu turns
+them off and on and sets the order they load in. Refer to
+[docs/mods.md](docs/mods.md). Mods change only what you see and hear; the
+host's rules still decide the game.
+
 ## Build
 
 Install Python, ninja, CMake, JDK 17+, the Android SDK (API 35) and NDK,
