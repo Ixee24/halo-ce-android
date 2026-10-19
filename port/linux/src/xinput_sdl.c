@@ -382,7 +382,9 @@ static int mouse_is_aim_device(short gamepad_index)
     if (gamepad_index != 0) return FALSE;
     pthread_mutex_lock(&mouse_lock);
     aiming = stick_aimed_ms == 0 || mouse_aimed_ms >= stick_aimed_ms;
-#ifdef HALO_ANDROID
+#if defined(HALO_WEB)
+    /* (Android's touch look is recorded as mouse aim by halo_linux_mouse_look,
+    so it needs no separate clock here) */
     if (touch_aimed_ms != 0 && touch_aimed_ms >= mouse_aimed_ms &&
         touch_aimed_ms >= stick_aimed_ms) aiming = FALSE;
 #endif
