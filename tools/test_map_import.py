@@ -22,7 +22,7 @@ def method(name):
 
 code = r'''
 public class MapImportTest {
-'''+method('sanitizeMapName')+method('isResourceMapName')+r'''
+'''+method('sanitizeMapName')+method('isResourceMapName')+method('sanitizeModName')+r'''
  static void check(boolean condition, String message) {
   if (!condition) throw new RuntimeException("Map import regression: "+message);
  }
@@ -44,7 +44,22 @@ public class MapImportTest {
   check(isResourceMapName("bitmaps.map") && isResourceMapName("SOUNDS.MAP") && isResourceMapName("loc.map"),
    "shared resource maps recognized");
   check(!isResourceMapName("bloodgulch.map") && !isResourceMapName(null), "ordinary maps not shared");
+
+  check("hd_audio".equals(sanitizeModName("hd_audio")), "plain mod folder name kept");
+  check("hd_audio".equals(sanitizeModName("hd_audio.zip")), "zip suffix dropped");
+  check("HD Textures".equals(sanitizeModName("HD Textures.ZIP")), "uppercase zip suffix dropped with spaces kept");
+  check("german".equals(sanitizeModName("/sdcard/Download/german")), "folder path stripped to leaf");
+  check("high-res (v2)".equals(sanitizeModName("high-res (v2)")), "safe punctuation kept in a mod name");
+  check("a_b_c".equals(sanitizeModName("a:b?c")), "unsafe characters replaced in a mod name");
+  check(sanitizeModName(null) == null && sanitizeModName("") == null && sanitizeModName("   ") == null,
+   "empty mod names rejected");
+  check(sanitizeModName(".zip") == null, "a bare zip suffix leaves no name");
+  check("trimmed".equals(sanitizeModName("trimmed...   .zip")), "trailing dots and spaces trimmed from a mod name");
+  check("x".repeat(63).equals(sanitizeModName("x".repeat(80))), "mod name cut to 63 bytes");
+  check(sanitizeModName(new String(Character.toChars(0x00e9)).repeat(40)).length() == 31, "multibyte mod name cut on a character boundary");
+
   System.out.println("Map filename validation, truncation and rejection passed");
+  System.out.println("Mod folder name validation, zip suffix and 63-byte limit passed");
  }
 }
 '''

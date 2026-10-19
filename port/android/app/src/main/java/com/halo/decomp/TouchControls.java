@@ -501,6 +501,39 @@ public final class TouchControls extends View implements SensorEventListener {
         if (kept.length() == 0) return null;
         return kept+".map";
     }
+    /** Folder name for an imported mod, or null: the picker's leaf name, a .zip suffix dropped, kept to the game's 63-byte folder-name limit. */
+    static String sanitizeModName(String name) {
+        if (name == null) return null;
+        int slash = Math.max(name.lastIndexOf('/'), name.lastIndexOf('\\'));
+        String leaf = (slash >= 0 ? name.substring(slash+1) : name).trim();
+        if (leaf.length() >= 4 && leaf.regionMatches(true, leaf.length()-4, ".zip", 0, 4))
+            leaf = leaf.substring(0, leaf.length()-4);
+        StringBuilder kept = new StringBuilder();
+        for (int i = 0; i < leaf.length() && kept.length() < 63; i++) {
+            char c = leaf.charAt(i);
+            kept.append(Character.isLetterOrDigit(c) || c == ' ' || c == '_' || c == '-' || c == '.'
+                || c == '(' || c == ')' ? c : '_');
+        }
+        while (kept.length() > 0 && (kept.charAt(kept.length()-1) == ' ' || kept.charAt(kept.length()-1) == '.'))
+            kept.setLength(kept.length()-1);
+        while (kept.length() > 0 && kept.charAt(0) == ' ') kept.deleteCharAt(0);
+        if (kept.length() == 0) return null;
+        String candidate = kept.toString();
+        if (candidate.getBytes(java.nio.charset.StandardCharsets.UTF_8).length > 63) {
+            int i = 0, bytes = 0;
+            while (i < candidate.length()) {
+                int code = candidate.codePointAt(i);
+                int width = new String(Character.toChars(code)).getBytes(java.nio.charset.StandardCharsets.UTF_8).length;
+                if (bytes+width > 63) break;
+                bytes += width; i += Character.charCount(code);
+            }
+            candidate = candidate.substring(0, i);
+            while (candidate.length() > 0 && (candidate.charAt(candidate.length()-1) == ' ' || candidate.charAt(candidate.length()-1) == '.'))
+                candidate = candidate.substring(0, candidate.length()-1);
+            if (candidate.isEmpty()) return null;
+        }
+        return candidate;
+    }
     private java.io.File mapsDirectory() {
         android.content.Context context = getContext();
         java.io.File root = context == null ? null : context.getExternalFilesDir(null);
@@ -662,6 +695,10 @@ public final class TouchControls extends View implements SensorEventListener {
             android.content.Context context = getContext();
             if (context instanceof HaloActivity) ((HaloActivity) context).importMapFile();
             else Toast.makeText(context, "Import is unavailable here.", Toast.LENGTH_LONG).show();
+        } else if (action == 53) {
+            android.content.Context context = getContext();
+            if (context instanceof HaloActivity) ((HaloActivity) context).importModFolder();
+            else Toast.makeText(context, "Import is unavailable here.", Toast.LENGTH_LONG).show();
         } else if (action == 51) {
             if (selectedMap == null) menuPage = 15;
             else {
@@ -794,6 +831,7 @@ public final class TouchControls extends View implements SensorEventListener {
             title = "Maps & Mods";
             refreshMapList();
             row.accept("Import map", 50);
+            row.accept("Import mod", 53);
             for (int i = 0; i < mapNames.size(); i++)
                 row.accept(mapNames.get(i)+(isResourceMapName(mapNames.get(i)) ? " [shared]" : ""), 4000+i);
         } else if (menuPage == 16) {

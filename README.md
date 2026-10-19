@@ -58,7 +58,9 @@ Quit at its original position and size; the pause frame extends below its extra 
 The main menu's Porting options also include **Maps & Mods**: **Import map**
 copies a Halo Custom Edition map (`.map`) chosen with Android's document picker
 into `custom_maps` beside `maps`, where the level lists pick it up; tapping a
-listed map offers **Rename** and **Delete**. `bitmaps.map`, `sounds.map` and
+listed map offers **Rename** and **Delete**. **Import mod** copies a mod's
+folder, or a `.zip` of one, into `mods` beside `maps`, where the Mods menu
+picks it up. `bitmaps.map`, `sounds.map` and
 `loc.map` are marked **[shared]**: every custom map reads its tags from that one
 copy, so replacing one affects them all (and at least one copy must be present
 for any custom map to load).

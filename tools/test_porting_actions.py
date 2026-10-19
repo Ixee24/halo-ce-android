@@ -76,7 +76,8 @@ public class PortingActionsTest {
  static class Toast {static final int LENGTH_SHORT=0,LENGTH_LONG=1;static String last;
   static Toast makeText(Object c,String s,int l){last=s;return new Toast();}void show(){}}
  static class HaloActivity extends android.content.Context {
-  boolean importCalled;void importMapFile(){importCalled=true;}
+  boolean importCalled,importModCalled;void importMapFile(){importCalled=true;}
+  void importModFolder(){importModCalled=true;}
  }
  HaloActivity halo=new HaloActivity();
  void openCreator(){} android.content.Context getContext(){return halo;}void reset(){}void updateSensors(){}void cancelRumble(){}void invalidate(){}
@@ -144,15 +145,17 @@ code += r'''
    t.menuContext=2;t.publishMenu();
    check(!java.util.Arrays.asList(t.labels).contains("MAPS & MODS"),"Pause menu has no Maps & Mods");
    t.menuContext=1;t.menuPage=15;t.publishMenu();
-   check(t.title.equals("MAPS & MODS") && t.labels.length==5 && t.labels[0].equals("IMPORT MAP")
-    && t.labels[1].equals("A_MAP.MAP") && t.labels[2].equals("B_MAP.MAP")
-    && t.labels[3].equals("BITMAPS.MAP [SHARED]") && t.labels[4].equals("BACK"),
-    "Maps page imports and lists .map files sorted with Back");
+   check(t.title.equals("MAPS & MODS") && t.labels.length==6 && t.labels[0].equals("IMPORT MAP")
+    && t.labels[1].equals("IMPORT MOD") && t.labels[2].equals("A_MAP.MAP")
+    && t.labels[3].equals("B_MAP.MAP") && t.labels[4].equals("BITMAPS.MAP [SHARED]")
+    && t.labels[5].equals("BACK"),
+    "Maps page imports maps and mods, and lists .map files sorted with Back");
    t.applyMenuAction(4000,0);check(t.menuPage==16 && t.selectedMap.equals("a_map.map"),"Tap selects a map");
    t.applyMenuAction(90,0);check(t.menuPage==15,"Map Back returns to the list");
    t.applyMenuAction(90,0);check(t.menuPage==1,"List Back returns to Porting options");
    t.applyMenuAction(15,0);check(t.menuPage==15,"Maps & Mods opens the list");
    t.applyMenuAction(50,0);check(t.halo.importCalled,"Import opens the document picker");
+   t.applyMenuAction(53,0);check(t.halo.importModCalled,"Import mod opens its folder picker");
    android.widget.EditText.nextText="renamed";
    t.applyMenuAction(4000,0);t.applyMenuAction(51,0);
    check(new java.io.File(maps,"renamed.map").isFile() && !new java.io.File(maps,"a_map.map").exists()

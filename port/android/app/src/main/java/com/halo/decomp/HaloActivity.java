@@ -38,7 +38,8 @@ public class HaloActivity extends SDLActivity {
     private volatile int[] gestureInsets = new int[] { 0, 0, 0, 0 };
     /** the on-screen touch controls, over SDL's surface */
     private TouchControls touchControls;
-    private static final int EXPORT_LAYOUT = 401, IMPORT_LAYOUT = 402, IMPORT_MAP = 403;
+    private static final int EXPORT_LAYOUT = 401, IMPORT_LAYOUT = 402, IMPORT_MAP = 403,
+            IMPORT_MOD_FOLDER = 404, IMPORT_MOD_ARCHIVE = 405;
     private String pendingLayoutExport;
 
     @Override
@@ -99,6 +100,12 @@ public class HaloActivity extends SDLActivity {
 
     @Override
     protected void onActivityResult(int request, int result, Intent data) {
+        if (request == IMPORT_MOD_FOLDER || request == IMPORT_MOD_ARCHIVE) {
+            if (result != RESULT_OK || data == null || data.getData() == null) return;
+            Uri source = data.getData();
+            new Thread(() -> importMod(request == IMPORT_MOD_FOLDER, source), "halo-mod-import").start();
+            return;
+        }
 if (request != EXPORT_LAYOUT && request != IMPORT_LAYOUT && request != IMPORT_MAP) {
             super.onActivityResult(request, result, data); return;
         }
@@ -249,8 +256,215 @@ if (request != EXPORT_LAYOUT && request != IMPORT_LAYOUT && request != IMPORT_MA
         }
     }
 
-    private String queryDisplayName(Uri document) {
-        try (android.database.Cursor cursor = getContentResolver().query(document,
+    /** SAF lets the player choose a mod folder or archive without storage permissions; it is copied to mods. */
+    public void importModFolder() {
+        new AlertDialog.Builder(this).setTitle("Import mod")
+            .setMessage("Choose a mod's folder (with its mod.toml and tags) or a .zip of one. It is copied to mods and appears in the Mods menu.")
+            .setNegativeButton("Cancel", null)
+            .setNeutralButton("ZIP file", (dialog, which) -> {
+                Intent intent = new Intent(Intent.ACTION_OPEN_DOCUMENT);
+                intent.addCategory(Intent.CATEGORY_OPENABLE);
+                intent.setType("*/*");
+                try { startActivityForResult(intent, IMPORT_MOD_ARCHIVE); }
+                catch (android.content.ActivityNotFoundException e) {
+                    Toast.makeText(this, "No document picker is available.", Toast.LENGTH_LONG).show();
+                }
+            })
+            .setPositiveButton("Folder", (dialog, which) -> {
+                Intent intent = new Intent(Intent.ACTION_OPEN_DOCUMENT_TREE);
+                try { startActivityForResult(intent, IMPORT_MOD_FOLDER); }
+                catch (android.content.ActivityNotFoundException e) {
+                    Toast.makeText(this, "No folder picker is available.", Toast.LENGTH_LONG).show();
+                }
+            }).show();
+    }
+
+    private void importMod(boolean folder, Uri source) {
+        String name = TouchControls.sanitizeModName(folder ? treeDisplayName(source) : queryDisplayName(source));
+        if (name == null) {
+            notifyMessage("That is not a mod folder or .zip file.");
+            return;
+        }
+        java.io.File root = getExternalFilesDir(null);
+        if (root == null) {
+            notifyMessage("Game storage is unavailable.");
+            return;
+        }
+        final java.io.File destination = new java.io.File(new java.io.File(root, "mods"), name);
+        if (destination.exists()) {
+            runOnUiThread(() -> {
+                if (isFinishing() || isDestroyed()) return;
+                new AlertDialog.Builder(this).setTitle("Replace mod")
+                    .setMessage(name+" is already in mods. Replace it?")
+                    .setNegativeButton("Cancel", null)
+                    .setPositiveButton("Replace", (dialog, which) ->
+                        new Thread(() -> copyImportedMod(folder, source, destination), "halo-mod-import").start())
+                    .show();
+            });
+            return;
+        }
+        copyImportedMod(folder, source, destination);
+    }
+
+    private void copyImportedMod(boolean folder, Uri source, java.io.File destination) {
+        java.io.File parent = destination.getParentFile();
+        java.io.File partial = parent == null ? null : new java.io.File(parent, destination.getName()+".partial");
+        String message;
+        try {
+            if (parent == null || (!parent.isDirectory() && !parent.mkdirs()))
+                throw new IOException("Cannot create mods");
+            deleteTree(partial);
+            if (folder) copyDocumentTree(source, partial);
+            else extractModArchive(source, partial);
+            if (!new java.io.File(partial, "mod.toml").isFile())
+                throw new IOException("there is no mod.toml, so it is not a mod");
+            deleteTree(destination);
+            if (!partial.renameTo(destination))
+                throw new IOException("Cannot install "+destination.getName());
+            message = "Imported mod "+destination.getName()+".";
+        } catch (Exception e) {
+            deleteTree(partial);
+            message = "Could not import mod: "+e.getMessage();
+        }
+        notifyMessage(message);
+    }
+
+    /** Copied from a folder picked with ACTION_OPEN_DOCUMENT_TREE: its contents become the mod. */
+    private void copyDocumentTree(Uri tree, java.io.File destination) throws IOException {
+        if (!destination.isDirectory() && !destination.mkdirs())
+            throw new IOException("Cannot create the mod folder");
+        String rootId = android.provider.DocumentsContract.getTreeDocumentId(tree);
+        copyDocumentChildren(tree, rootId, destination, 0);
+    }
+
+    private void copyDocumentChildren(Uri tree, String parentId, java.io.File destination, int depth) throws IOException {
+        if (depth > 24)
+            throw new IOException("the mod's folders are too deep");
+        Uri children = android.provider.DocumentsContract.buildChildDocumentsUriUsingTree(tree, parentId);
+        try (android.database.Cursor cursor = getContentResolver().query(children,
+                new String[]{android.provider.DocumentsContract.Document.COLUMN_DOCUMENT_ID,
+                    android.provider.DocumentsContract.Document.COLUMN_DISPLAY_NAME,
+                    android.provider.DocumentsContract.Document.COLUMN_MIME_TYPE}, null, null, null)) {
+            if (cursor == null)
+                throw new IOException("the folder cannot be read");
+            while (cursor.moveToNext()) {
+                String id = cursor.getString(0);
+                String name = safeFileName(cursor.getString(1));
+                if (name == null) continue;
+                java.io.File target = new java.io.File(destination, name);
+                if (android.provider.DocumentsContract.Document.MIME_TYPE_DIR.equals(cursor.getString(2))) {
+                    if (!target.isDirectory() && !target.mkdirs())
+                        throw new IOException("Cannot create "+name);
+                    copyDocumentChildren(tree, id, target, depth+1);
+                } else {
+                    Uri document = android.provider.DocumentsContract.buildDocumentUriUsingTree(tree, id);
+                    try (InputStream input = getContentResolver().openInputStream(document)) {
+                        if (input == null) throw new IOException("Cannot read "+name);
+                        try (OutputStream output = new java.io.FileOutputStream(target)) {
+                            byte[] buffer = new byte[65536]; int size;
+                            while ((size = input.read(buffer)) != -1) output.write(buffer, 0, size);
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    /** Copied from a .zip picked with ACTION_OPEN_DOCUMENT; a single wrapping folder is unwrapped. */
+    private void extractModArchive(Uri source, java.io.File destination) throws IOException {
+        if (!destination.isDirectory() && !destination.mkdirs())
+            throw new IOException("Cannot create the mod folder");
+        try (InputStream input = getContentResolver().openInputStream(source)) {
+            if (input == null) throw new IOException("the file cannot be opened");
+            try (java.util.zip.ZipInputStream archive = new java.util.zip.ZipInputStream(input)) {
+                byte[] buffer = new byte[65536];
+                for (java.util.zip.ZipEntry entry; (entry = archive.getNextEntry()) != null; ) {
+                    String entryName = entry.getName().replace('\\', '/');
+                    for (String part : entryName.split("/"))
+                        if (part.equals("..")) throw new IOException("the archive has an unsafe path");
+                    java.io.File target = new java.io.File(destination, entryName);
+                    if (entry.isDirectory()) {
+                        if (!target.isDirectory() && !target.mkdirs())
+                            throw new IOException("Cannot create "+entryName);
+                        continue;
+                    }
+                    java.io.File dir = target.getParentFile();
+                    if (dir != null && !dir.isDirectory() && !dir.mkdirs())
+                        throw new IOException("Cannot create "+entryName);
+                    try (OutputStream output = new java.io.FileOutputStream(target)) {
+                        int size;
+                        while ((size = archive.read(buffer)) != -1) output.write(buffer, 0, size);
+                    }
+                }
+            }
+        }
+        unwrapSingleFolder(destination);
+    }
+
+    /** A .zip of one folder (the usual download) holds the mod one level down; move it up. */
+    private void unwrapSingleFolder(java.io.File destination) throws IOException {
+        if (new java.io.File(destination, "mod.toml").isFile()) return;
+        java.io.File[] entries = destination.listFiles();
+        java.util.ArrayList<java.io.File> candidates = new java.util.ArrayList<>();
+        if (entries != null) for (java.io.File entry : entries)
+            if (!entry.getName().startsWith(".") && !entry.getName().equals("__MACOSX"))
+                candidates.add(entry);
+        if (candidates.size() != 1 || !candidates.get(0).isDirectory()) return;
+        java.io.File inner = candidates.get(0);
+        if (!new java.io.File(inner, "mod.toml").isFile()) return;
+        java.io.File[] contents = inner.listFiles();
+        if (contents == null) return;
+        for (java.io.File item : contents)
+            if (!item.renameTo(new java.io.File(destination, item.getName())))
+                throw new IOException("Cannot install "+item.getName());
+        inner.delete();
+    }
+
+    /** The folder's name as Android reports it, for the mod's name in mods. */
+    private String treeDisplayName(Uri tree) {
+        try {
+            String id = android.provider.DocumentsContract.getTreeDocumentId(tree);
+            Uri document = android.provider.DocumentsContract.buildDocumentUriUsingTree(tree, id);
+            try (android.database.Cursor cursor = getContentResolver().query(document,
+                    new String[]{android.provider.DocumentsContract.Document.COLUMN_DISPLAY_NAME},
+                    null, null, null)) {
+                if (cursor != null && cursor.moveToFirst()) {
+                    String name = cursor.getString(0);
+                    if (name != null && !name.isEmpty()) return name;
+                }
+            }
+        } catch (Exception e) { /* fall through to the URI's last segment */ }
+        return queryDisplayName(tree);
+    }
+
+    /** One path segment of an imported mod, or null if Android gave nothing usable. */
+    private static String safeFileName(String name) {
+        if (name == null) return null;
+        StringBuilder kept = new StringBuilder();
+        for (int i = 0; i < name.length() && kept.length() < 200; i++) {
+            char c = name.charAt(i);
+            kept.append(c == '/' || c == '\\' || c == 0 || c < 32 || c == 127 ? '_' : c);
+        }
+        String clean = kept.toString().trim();
+        if (clean.isEmpty() || clean.equals(".") || clean.equals("..")) return null;
+        return clean;
+    }
+
+    private void deleteTree(java.io.File file) {
+        if (file == null || !file.exists()) return;
+        java.io.File[] children = file.listFiles();
+        if (children != null) for (java.io.File child : children) deleteTree(child);
+        file.delete();
+    }
+
+    private void notifyMessage(String message) {
+        runOnUiThread(() -> {
+            if (isFinishing() || isDestroyed()) return;
+            Toast.makeText(this, message, Toast.LENGTH_LONG).show();
+        });
+    }
+
+    private String queryDisplayName(Uri document) {        try (android.database.Cursor cursor = getContentResolver().query(document,
                 new String[]{android.provider.OpenableColumns.DISPLAY_NAME}, null, null, null)) {
             if (cursor != null && cursor.moveToFirst()) {
                 String name = cursor.getString(0);

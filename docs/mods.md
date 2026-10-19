@@ -18,8 +18,10 @@ tag) and `port/linux/src/port_mods.c` (the mods folder and its files).
 
 The mods are in the `mods` folder of the data root (the folder with
 `maps/`; on Android the app's data folder, on the web the browser's storage
-for the site). Each mod is a folder in it, with a `mod.toml` and a `tags`
-folder:
+for the site). On Android the main menu's Porting options have **Maps &
+Mods**, and **Import mod** there copies a mod's folder, or a `.zip` of one,
+into `mods` through Android's picker. Each mod is a folder in it, with a
+`mod.toml` and a `tags` folder:
 
 ```
 mods/
