@@ -77,9 +77,13 @@ CHILD_OFFSETS = {
     ("ui\\shell\\main_menu\\main_menu_select_list", "ui\\shell\\main_menu\\main_menu_item_quit_game"):
         port_settings.QUIT_ITEM_PLACE,
     ("ui\\shell\\main_menu\\multiplayer_type_select\\multiplayer_type_select_list",
-     "ui\\shell\\main_menu\\multiplayer_type_select\\multiplayer_type_gametypes_item"): (0, 358),
+     "ui\\shell\\main_menu\\multiplayer_type_select\\multiplayer_type_gametypes_item"): (0, 392),
+    # (the button bar a row lower, below the gametypes item, and the divider
+    # between them: port_settings.WIDGET_PATCHES inserts Local (bots))
+    ("ui\\shell\\main_menu\\multiplayer_type_select\\multiplayer_type_select_list",
+     "ui\\shell\\main_menu\\multiplayer_type_select\\multiplayer_type_button_bar"): (0, 440),
     ("ui\\shell\\main_menu\\multiplayer_type_select\\multiplayer_type_select_screen",
-     "ui\\shell\\main_menu\\blueline"): (64, 349),
+     "ui\\shell\\main_menu\\blueline"): (64, 383),
     # the browser's rows up under the column titles, into the place of the
     # scroll up button (hidden: the list does not scroll)
     **{("ui\\shell\\main_menu\\multiplayer_type_select\\join_game\\join_game_items_list",

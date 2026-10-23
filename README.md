@@ -187,6 +187,27 @@ each containing its APK and notices at the ZIP root. Create these ZIPs
 without compression (stored entries) for compatibility with older updaters;
 mark the release as latest.
 
+## Local games with bots
+
+**Multiplayer → CREATE GAME → LOCAL (BOTS)** hosts a game on this device
+alone: it accepts no remote players, which is what lets bots join its lobby.
+Choose a map and **Slayer** as its gametype in the usual screens; bots join
+the lobby before it starts.
+
+Bots are configured in `config.toml` under
+`/sdcard/Android/data/com.halo.decomp/files/`, then the app is restarted:
+
+```toml
+[bots]
+count = 7          # 0 to 15
+skill = "normal"   # "easy", "normal", "heroic" or "legendary"
+teams = "even"     # "even" (both teams) or "against" (the other team)
+```
+
+`bots.count` is 0 by default, as in the stock game. Bots play Slayer only;
+other gametypes ignore them. The **Co-op Campaign** entry is the stock
+split-screen campaign for two local players, not bots.
+
 ## Online multiplayer
 
 Both players must use compatible builds (equal network versions). The host

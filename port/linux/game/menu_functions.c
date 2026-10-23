@@ -2701,6 +2701,8 @@ enum
 	_multiplayer_mode_direct_link,
 	_multiplayer_mode_host_internet,
 	_multiplayer_mode_host_lan,
+	/* (a game on this machine alone, which bots may join: no remote ones) */
+	_multiplayer_mode_host_local,
 };
 
 enum
@@ -2760,6 +2762,7 @@ void network_game_server_port_set_cooperative_player_collisions(boolean player_c
 void *global_network_game_client_get(void);
 void *global_network_game_server_get(void);
 boolean network_game_is_splitscreen_local(void);
+void network_game_accept_remote_connections(boolean accept_remote_connections);
 struct advertised_game *network_game_client_get_available_games(void *client);
 boolean network_game_client_advertised_game_is_valid(struct advertised_game *game);
 short network_game_client_get_state(void *client, short *state_data);
@@ -2970,6 +2973,7 @@ static void multiplayer_mode_set(struct widget_instance *widget)
 	"multiplayer_type_create_interne") */
 	multiplayer.mode =
 		strstr(name, "create_inter") ? _multiplayer_mode_host_internet :
+		strstr(name, "create_local") ? _multiplayer_mode_host_local :
 		strstr(name, "create_lan") ? _multiplayer_mode_host_lan :
 		strstr(name, "join_lan") ? _multiplayer_mode_lan :
 		strstr(name, "join_direct") ? _multiplayer_mode_direct_link : _multiplayer_mode_server_browser;
@@ -2986,10 +2990,13 @@ static boolean multiplayer_player(short controller)
 }
 
 /* Create Game's ("join controller to mp game", first): player 1 in, and
-the server made: an internet one (an invite, Discord) or a LAN one */
+the server made: an internet one (an invite, Discord), a LAN one, or a local
+one (bots.c: they join only a game that takes no remote players) */
 static boolean multiplayer_host(struct widget_instance *widget, struct event_record *event, short controller,
 	boolean *widget_deleted)
 {
+	boolean result;
+
 	multiplayer_mode_set(widget);
 	if (!multiplayer_player(controller))
 		return FALSE;
@@ -2999,7 +3006,12 @@ static boolean multiplayer_host(struct widget_instance *widget, struct event_rec
 	multiplayer.game_private = !config_boolean("network.host_public");
 	p2p_set_hosting_public(multiplayer.mode == _multiplayer_mode_host_internet && !multiplayer.game_private);
 	multiplayer.cooperative_maximum_players_set = FALSE;
-	return ui_widget_port_host(widget, event, widget_deleted);
+	result = ui_widget_port_host(widget, event, widget_deleted);
+	/* (as the Xbox's split screen game does: a local game, which bots can
+	join, and which no machine can join) */
+	if (result && multiplayer.mode == _multiplayer_mode_host_local)
+		network_game_accept_remote_connections(FALSE);
+	return result;
 }
 
 /* ---- the map list (the Map screen's): its chooser's SINGLEPLAYER levels,
@@ -3475,7 +3487,9 @@ static void server_settings_update(struct widget_instance *list)
 			NUMBEROF(maximum_players) - 1);
 	wide_to_text(multiplayer.game_name, text, sizeof(text));
 	text_field_show(named(list, "server_name_value", 0), text, text_field_editing(row));
-	if (multiplayer.mode != _multiplayer_mode_host_internet)
+	if (multiplayer.mode == _multiplayer_mode_host_local)
+		snprintf(text, sizeof(text), "NONE: A LOCAL GAME");
+	else if (multiplayer.mode != _multiplayer_mode_host_internet)
 		snprintf(text, sizeof(text), "NONE: A LAN GAME");
 	else if (!config_boolean("network.online"))
 		snprintf(text, sizeof(text), "INTERNET PLAY IS OFF (SETTINGS)");
@@ -5097,7 +5111,8 @@ static void lobby_update(struct widget_instance *list)
 
 			usnprintf(text + length, NUMBEROF(text) - 1 - length, L" %d", seconds);
 		}
-		if (global_network_game_server_get() && p2p_invite_link(link, sizeof(link)))
+		if (multiplayer.mode != _multiplayer_mode_host_local &&
+			global_network_game_server_get() && p2p_invite_link(link, sizeof(link)))
 		{
 			size_t length = ustrlen(text);
 
@@ -6169,7 +6184,8 @@ boolean pc_menu_event_function_invoke(
 			to mp game" before; it fails with the game's port in use, by
 			another copy of the game) */
 			if ((multiplayer.mode == _multiplayer_mode_host_internet ||
-				multiplayer.mode == _multiplayer_mode_host_lan) && !global_network_game_server_get())
+				multiplayer.mode == _multiplayer_mode_host_lan ||
+				multiplayer.mode == _multiplayer_mode_host_local) && !global_network_game_server_get())
 			{
 				platform_log("menus: the game could not be made (is its port in use?)");
 				return campaign_fail();

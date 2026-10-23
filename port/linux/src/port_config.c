@@ -396,9 +396,10 @@ static const struct config_setting config_settings[] =
 		"as the game's own maps' are before they run; false refuses them\n"
 		"(docs/custom_edition_caches.md)." },
 	{ "bots.count", _config_integer, "0", "HALO_BOTS", _environment_value, _platform_all,
-		"Computer players (bots) in a local (split screen) Slayer game: 0 to 15\n"
-		"join its lobby with the players, as far as the game has room. Not in\n"
-		"system link or internet games. 0: none, as in the stock game." },
+		"Computer players (bots) in a local Slayer game (Multiplayer's LOCAL\n"
+		"(BOTS), or split screen): 0 to 15 join its lobby with the players, as\n"
+		"far as the game has room. Not in system link or internet games. 0:\n"
+		"none, as in the stock game." },
 	{ "bots.skill", _config_string, "\"normal\"", "HALO_BOT_SKILL", _environment_value, _platform_all,
 		"How well the bots play: \"easy\", \"normal\", \"heroic\" or \"legendary\"\n"
 		"(how soon they react, how well they aim, how far they see)." },
