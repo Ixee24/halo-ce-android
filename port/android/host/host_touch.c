@@ -26,6 +26,13 @@ static float field_of_view = 70.0f;
 static float hud_offsets[6];
 /* The installed app's version, for the main menu's build label. */
 static char app_version[HALO_APP_VERSION_SIZE];
+/* the overlay's devices (host_touch_devices): a touchscreen, a game
+controller (a stick or a hat, not a phone's few gamepad keys) */
+#define HOST_TOUCH_DEVICE_TOUCHSCREEN 1
+#define HOST_TOUCH_DEVICE_CONTROLLER 2
+static volatile int touch_devices = HOST_TOUCH_DEVICE_TOUCHSCREEN;
+static int touch_bindings_serial;
+>>>>>>> upstream/main
 
 JNIEXPORT void JNICALL Java_com_halo_decomp_TouchControls_nativeFieldOfView(
     JNIEnv *env, jclass cls, jfloat degrees)
@@ -370,4 +377,30 @@ void host_touch_scene(int scene)
 void host_touch_bindings(const int32_t *controls)
 {
     (void)controls;
+}
+
+/* the overlay's devices, as it last found them (TouchControls'
+refreshInputDevices) */
+JNIEXPORT void JNICALL Java_com_halo_decomp_TouchControls_nativeDevices(JNIEnv *env, jclass cls,
+	jboolean touchscreen, jboolean controller)
+{
+	(void)env;
+	(void)cls;
+	touch_devices = (touchscreen ? HOST_TOUCH_DEVICE_TOUCHSCREEN : 0) |
+		(controller ? HOST_TOUCH_DEVICE_CONTROLLER : 0);
+}
+
+/* the guest's: the overlay's devices as HOST_TOUCH_DEVICE_* bits; 0 until it
+has looked */
+int host_touch_devices(void)
+{
+	return touch_devices;
+}
+
+/* 0 until the game has read its controller once */
+JNIEXPORT jint JNICALL Java_com_halo_decomp_TouchControls_nativeScene(JNIEnv *env, jclass cls)
+{
+	(void)env;
+	(void)cls;
+	return 0;
 }
