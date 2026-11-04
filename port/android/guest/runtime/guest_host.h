@@ -62,6 +62,7 @@ long long host_sdl_thread_id(void);
 unsigned int host_sdl_create_window(const char *title, int width, int height, long long flags);
 void host_sdl_window_size_in_pixels(unsigned int window, int *width, int *height);
 int host_sdl_set_relative_mouse(unsigned int window, int enabled);
+int host_sdl_chat_keyboard(unsigned int window, int show);
 int host_sdl_gl_set_attribute(int attribute, int value);
 unsigned int host_sdl_gl_create_context(unsigned int window);
 int host_sdl_gl_make_current(unsigned int window, unsigned int context);

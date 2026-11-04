@@ -121,6 +121,12 @@ extern const unsigned int platform_menu_cursor[];
 extern const unsigned long platform_menu_cursor_size;
 #endif
 #endif
+#ifdef HALO_ANDROID
+static void chat_keyboard_update(void);
+/* whether a chat line has Android's keyboard up (sdl_platform.c's
+platform_chat_keyboard, network_chat.c) */
+static SDL_AtomicInt chat_keyboard_wanted;
+#endif
 
 #if !defined(HALO_ANDROID) && !defined(HALO_WEB)
 /* the maps folder checked to hold the Xbox maps (platform_maps_folder_check).
@@ -2002,6 +2008,9 @@ void platform_pump_events(void)
 	/* (Settings > Audio's output device, as it changes: dsound_sdl.c) */
 	dsound_sdl_output_device_check();
 	screen_keyboard_update();
+#else
+	/* (the text chat's line: Android's own keyboard) */
+	chat_keyboard_update();
 #endif
 	pthread_mutex_lock(&input_lock);
 #ifndef HALO_ANDROID
@@ -2020,6 +2029,13 @@ void platform_pump_events(void)
 			pthread_mutex_unlock(&input_lock);
 			platform_log("window closed");
 			exit(EXIT_SUCCESS);
+#ifdef HALO_ANDROID
+		/* (the keyboard closed by the system, as with the back key: the
+		chat line ends, network_chat.c) */
+		case SDL_EVENT_SCREEN_KEYBOARD_HIDDEN:
+			SDL_SetAtomicInt(&chat_keyboard_wanted, 0);
+			break;
+#endif
 		case SDL_EVENT_KEY_DOWN:
 		case SDL_EVENT_KEY_UP:
 			if (event.key.scancode < SDL_SCANCODE_COUNT)
@@ -2519,6 +2535,58 @@ void platform_video_window_size(int *width, int *height)
 }
 
 #endif
+
+/* ---------- the text chat's keyboard (network_chat.c) */
+
+/* Android's own keyboard (the input method) types the chat line that the
+controller's D-pad Up starts, in place of the keyboard the game draws:
+SDL shows it while text input runs, and its keys arrive as the game's
+(guest_sdl.c, host_sdl.c). Elsewhere the game's keyboard is the only one. */
+#ifdef HALO_ANDROID
+int platform_chat_keyboard(int show)
+{
+	SDL_SetAtomicInt(&chat_keyboard_wanted, show != 0);
+	return TRUE;
+}
+
+int platform_chat_keyboard_active(void)
+{
+	return SDL_GetAtomicInt(&chat_keyboard_wanted) != 0;
+}
+
+/* (on the window's thread, as SDL asks: platform_pump_events) */
+static void chat_keyboard_update(void)
+{
+	static int shown;
+	int wanted;
+
+	if (!platform_window)
+		return;
+	wanted = SDL_GetAtomicInt(&chat_keyboard_wanted);
+	if (wanted == shown)
+		return;
+	shown = wanted;
+	if (wanted)
+	{
+		if (!SDL_StartTextInput(platform_window))
+			platform_log("chat: the keyboard would not come up: %s", SDL_GetError());
+	}
+	else
+		SDL_StopTextInput(platform_window);
+}
+#else
+int platform_chat_keyboard(int show)
+{
+	(void)show;
+	return FALSE;
+}
+
+int platform_chat_keyboard_active(void)
+{
+	return FALSE;
+}
+#endif
+
 void platform_input_read(struct platform_input_state *state, BOOL consume_motion)
 {
 	pthread_mutex_lock(&input_lock);

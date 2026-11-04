@@ -153,6 +153,17 @@ bool SDL_SetWindowRelativeMouseMode(SDL_Window *window, bool enabled)
 	return host_sdl_set_relative_mouse((unsigned int)window, enabled) != 0;
 }
 
+/* (the text chat's line: the Android keyboard, sdl_platform.c) */
+bool SDL_StartTextInput(SDL_Window *window)
+{
+	return host_sdl_chat_keyboard((unsigned int)window, 1) != 0;
+}
+
+bool SDL_StopTextInput(SDL_Window *window)
+{
+	return host_sdl_chat_keyboard((unsigned int)window, 0) != 0;
+}
+
 bool SDL_GL_SetAttribute(SDL_GLAttr attribute, int value)
 {
 	return host_sdl_gl_set_attribute((int)attribute, value) != 0;

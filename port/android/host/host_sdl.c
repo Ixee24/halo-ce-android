@@ -169,6 +169,32 @@ int host_sdl_set_relative_mouse(uint32_t window, int enabled)
 	return object ? SDL_SetWindowRelativeMouseMode(object, enabled != 0) : 0;
 }
 
+/* ---------- text input */
+
+/* the Android keyboard, for the text chat's line (sdl_platform.c): SDL
+shows the input method while text input runs, and hides it when it stops.
+A line is one line, and its suggestions would change what the player says */
+int host_sdl_chat_keyboard(uint32_t window, int show)
+{
+	SDL_Window *object = handle_get(window, _handle_window);
+	SDL_PropertiesID properties;
+	int result;
+
+	if (!object)
+		return 0;
+	if (!show)
+		return SDL_StopTextInput(object);
+	properties = SDL_CreateProperties();
+	if (!properties)
+		return 0;
+	SDL_SetBooleanProperty(properties, SDL_PROP_TEXTINPUT_MULTILINE_BOOLEAN, false);
+	SDL_SetBooleanProperty(properties, SDL_PROP_TEXTINPUT_AUTOCORRECT_BOOLEAN, false);
+	SDL_SetNumberProperty(properties, SDL_PROP_TEXTINPUT_TYPE_NUMBER, SDL_TEXTINPUT_TYPE_TEXT);
+	result = SDL_StartTextInputWithProperties(object, properties);
+	SDL_DestroyProperties(properties);
+	return result;
+}
+
 int host_sdl_gl_set_attribute(int attribute, int value)
 {
 	return SDL_GL_SetAttribute((SDL_GLAttr)attribute, value);

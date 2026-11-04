@@ -5,7 +5,9 @@ The text chat of network games (port/linux/NETCODE.md), as the PC version
 had it: T (controls.chat) starts a line to everyone, Y (controls.team_chat)
 one to the player's team; Tab, while typing, turns it to everyone, the team
 or the vehicle in turn; Enter sends it, Escape lets it go. A controller's
-D-pad Up (the touch controls' too) opens an on-screen keyboard instead,
+D-pad Up (the touch controls' too) starts a line on the on-screen keyboard
+instead: on Android the device's own (the input method, sdl_platform.c's
+platform_chat_keyboard), whose keys are typed, and elsewhere the game's,
 whose keys the stick moves through and A types, a tap types (the
 touchscreen), and the controller then drives nothing else (xinput_sdl.c's
 halo_chat_pad_buttons, halo_chat_taps). The lines are
@@ -88,6 +90,9 @@ mutes.
 /* the platform layer's */
 unsigned long system_milliseconds(void);
 int platform_clipboard_get(char *text, int size);
+/* sdl_platform.c's: Android's own keyboard for a line; none elsewhere */
+int platform_chat_keyboard(int show);
+int platform_chat_keyboard_active(void);
 /* port_config.c's */
 int config_boolean(const char *name);
 const char *config_string(const char *name);
@@ -296,10 +301,13 @@ static struct
 static unsigned long chat_actions_held;
 
 /* the on-screen keyboard, for a controller (D-pad Up opens it) and the
-touchscreen (its keys tapped) */
+touchscreen (its keys tapped); or Android's own (platform: its keys are
+typed, and none is drawn) */
 static struct
 {
 	boolean open;
+	/* (Android's own keyboard, not the game's: sdl_platform.c) */
+	boolean platform;
 	/* the key picked */
 	short row;
 	short column;
@@ -1580,7 +1588,9 @@ static void chat_input_end(
 {
 	chat_input.active = FALSE;
 	chat_keyboard.open = FALSE;
+	chat_keyboard.platform = FALSE;
 	chat_keyboard.drawn = FALSE;
+	platform_chat_keyboard(FALSE);
 }
 
 /* the line's last character gone */
@@ -1746,6 +1756,7 @@ void network_chat_update(
 	unsigned long pad_pressed = pad & ~chat_keyboard.held;
 	unsigned long now = system_milliseconds();
 	struct key_stroke key;
+	float tap_x, tap_y;
 
 	chat_keyboard.held = pad;
 	/* (the host's settings: a client's as the host sends them in each game;
@@ -1803,12 +1814,18 @@ void network_chat_update(
 			{
 				chat_input_begin(_chat_channel_everyone);
 				chat_keyboard.open = TRUE;
-				error(_error_log, "chat: the on-screen keyboard opened");
-				chat_keyboard.row = 1;
-				chat_keyboard.column = 0;
-				chat_keyboard.shift = FALSE;
-				chat_keyboard.symbols = FALSE;
-				chat_keyboard.repeat_at = 0;
+				chat_keyboard.platform = platform_chat_keyboard(TRUE) != 0;
+				if (!chat_keyboard.platform)
+				{
+					error(_error_log, "chat: the on-screen keyboard opened");
+					chat_keyboard.row = 1;
+					chat_keyboard.column = 0;
+					chat_keyboard.shift = FALSE;
+					chat_keyboard.symbols = FALSE;
+					chat_keyboard.repeat_at = 0;
+				}
+				else
+					error(_error_log, "chat: the input method opened");
 			}
 		}
 		return;
@@ -1818,7 +1835,29 @@ void network_chat_update(
 	if (console_is_active())
 		return;
 	if (chat_keyboard.open)
-		chat_keyboard_update(pad_pressed, pad);
+	{
+		if (chat_keyboard.platform)
+		{
+			if (!platform_chat_keyboard_active() || halo_chat_taps(&tap_x, &tap_y) ||
+				TEST_FLAG(pad_pressed, HALO_CHAT_PAD_B))
+			{
+				chat_input_end();
+				return;
+			}
+			if (TEST_FLAG(pad_pressed, HALO_CHAT_PAD_START))
+			{
+				chat_send(chat_input.channel, chat_input.text, TRUE);
+				chat_input_end();
+				return;
+			}
+			if (TEST_FLAG(pad_pressed, HALO_CHAT_PAD_UP))
+				chat_input.channel = (short)((chat_input.channel + NUMBER_OF_CHAT_CHANNELS - 1) % NUMBER_OF_CHAT_CHANNELS);
+			if (TEST_FLAG(pad_pressed, HALO_CHAT_PAD_DOWN))
+				chat_input.channel = (short)((chat_input.channel + 1) % NUMBER_OF_CHAT_CHANNELS);
+		}
+		else
+			chat_keyboard_update(pad_pressed, pad);
+	}
 	while (chat_input.active && input_get_key(&key))
 	{
 		switch (key.key_code)
@@ -2424,7 +2463,7 @@ void network_chat_draw(
 		text_filter_resume();
 		edge = (short)(edge + (touch ? line_height : -line_height));
 		rows--;
-		if (chat_keyboard.open)
+		if (chat_keyboard.open && !chat_keyboard.platform)
 			chat_keyboard_draw(font_index, &window, line_height);
 	}
 	for (index = 0; index < chat_line_count && rows > 0; index++)
