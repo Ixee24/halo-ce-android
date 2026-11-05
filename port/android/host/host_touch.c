@@ -32,7 +32,6 @@ controller (a stick or a hat, not a phone's few gamepad keys) */
 #define HOST_TOUCH_DEVICE_CONTROLLER 2
 static volatile int touch_devices = HOST_TOUCH_DEVICE_TOUCHSCREEN;
 static int touch_bindings_serial;
->>>>>>> upstream/main
 
 JNIEXPORT void JNICALL Java_com_halo_decomp_TouchControls_nativeFieldOfView(
     JNIEnv *env, jclass cls, jfloat degrees)
