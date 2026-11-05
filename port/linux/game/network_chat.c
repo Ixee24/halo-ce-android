@@ -2146,7 +2146,7 @@ void network_chat_update(
 			}
 			if (TEST_FLAG(pad_pressed, HALO_CHAT_PAD_START))
 			{
-				chat_send(chat_input.channel, chat_input.text, TRUE);
+				chat_send(chat_input.channel, chat_input.text, TRUE, TRUE);
 				chat_input_end();
 				return;
 			}
