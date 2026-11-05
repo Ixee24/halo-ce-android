@@ -135,7 +135,7 @@ extern const unsigned long platform_menu_cursor_size;
 static void chat_keyboard_update(void);
 /* whether a chat line has Android's keyboard up (sdl_platform.c's
 platform_chat_keyboard, network_chat.c) */
-static SDL_AtomicInt chat_keyboard_wanted;
+static int chat_keyboard_wanted;
 #endif
 
 #if !defined(HALO_ANDROID) && !defined(HALO_WEB)
@@ -2308,7 +2308,7 @@ void platform_pump_events(void)
 		/* (the keyboard closed by the system, as with the back key: the
 		chat line ends, network_chat.c) */
 		case SDL_EVENT_SCREEN_KEYBOARD_HIDDEN:
-			SDL_SetAtomicInt(&chat_keyboard_wanted, 0);
+			__atomic_store_n(&chat_keyboard_wanted, 0, __ATOMIC_SEQ_CST);
 			break;
 #endif
 		case SDL_EVENT_KEY_DOWN:
@@ -2889,13 +2889,13 @@ SDL shows it while text input runs, and its keys arrive as the game's
 #ifdef HALO_ANDROID
 int platform_chat_keyboard(int show)
 {
-	SDL_SetAtomicInt(&chat_keyboard_wanted, show != 0);
+	__atomic_store_n(&chat_keyboard_wanted, show != 0, __ATOMIC_SEQ_CST);
 	return TRUE;
 }
 
 int platform_chat_keyboard_active(void)
 {
-	return SDL_GetAtomicInt(&chat_keyboard_wanted) != 0;
+	return __atomic_load_n(&chat_keyboard_wanted, __ATOMIC_SEQ_CST) != 0;
 }
 
 /* (on the window's thread, as SDL asks: platform_pump_events) */
@@ -2906,7 +2906,7 @@ static void chat_keyboard_update(void)
 
 	if (!platform_window)
 		return;
-	wanted = SDL_GetAtomicInt(&chat_keyboard_wanted);
+	wanted = __atomic_load_n(&chat_keyboard_wanted, __ATOMIC_SEQ_CST);
 	if (wanted == shown)
 		return;
 	shown = wanted;
