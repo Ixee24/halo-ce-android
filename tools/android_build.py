@@ -92,7 +92,12 @@ ZLIB_SOURCES = ("adler32.c", "crc32.c", "inffast.c", "inflate.c", "inftrees.c", 
 ZLIB_DEFINES = ("-DZ_PREFIX", "-Dz_errmsg=z_port_errmsg")
 MUSL_VERSION = "1.2.5"
 MUSL_DIR = THIRD_PARTY / f"musl-{MUSL_VERSION}"
-MUSL_URL = f"https://musl.libc.org/releases/musl-{MUSL_VERSION}.tar.gz"
+MUSL_URLS = [
+    f"https://musl.libc.org/releases/musl-{MUSL_VERSION}.tar.gz",
+    f"https://deb.debian.org/debian/pool/main/m/musl/musl_{MUSL_VERSION}.orig.tar.gz",
+    f"https://sources.voidlinux.org/musl-{MUSL_VERSION}/musl-{MUSL_VERSION}.tar.gz",
+]
+MUSL_URL = MUSL_URLS[0]
 # (as tools/windows_build.py's and tools/linux_sysroot.py's SDL_VERSION)
 # (the download's SHA-256, and the tag's commit, when they were pinned)
 MUSL_SHA256 = "a9a118bbe84d8764da0ea0d28b3ab3fae8477fc7e4085d90102b8596fc7c75e4"
@@ -234,13 +239,30 @@ def fetch_third_party() -> None:
     """Download musl and SDL3 (configure time, once)."""
     THIRD_PARTY.mkdir(parents=True, exist_ok=True)
     if not MUSL_DIR.is_dir():
-        print(f"Downloading {MUSL_URL}")
         archive = THIRD_PARTY / f"musl-{MUSL_VERSION}.tar.gz"
-        subprocess.run(["curl", "-sSfL", "-o", str(archive), MUSL_URL], check=True)
-        digest = hashlib.sha256(archive.read_bytes()).hexdigest()
-        if digest != MUSL_SHA256:
-            archive.unlink()
-            raise SystemExit(f"{MUSL_URL}: SHA-256 {digest}, not the pinned {MUSL_SHA256}")
+        last_error = None
+        for url in MUSL_URLS:
+            print(f"Downloading {url}")
+            try:
+                subprocess.run(
+                    ["curl", "-sSfL", "--connect-timeout", "10", "-o", str(archive), url],
+                    check=True,
+                )
+                digest = hashlib.sha256(archive.read_bytes()).hexdigest()
+                if digest != MUSL_SHA256:
+                    print(f"{url}: SHA-256 {digest}, not the pinned {MUSL_SHA256}", file=sys.stderr)
+                    if archive.exists():
+                        archive.unlink()
+                    continue
+                last_error = None
+                break
+            except (subprocess.CalledProcessError, OSError) as error:
+                print(f"Failed to fetch {url}: {error}", file=sys.stderr)
+                if archive.exists():
+                    archive.unlink()
+                last_error = error
+        if last_error is not None or not archive.exists():
+            raise RuntimeError(f"musl-{MUSL_VERSION}: failed to download from all mirrors (last error: {last_error})")
         subprocess.run(["tar", "xzf", archive.name], cwd=THIRD_PARTY, check=True)
         archive.unlink()
     if not SDL_DIR.is_dir():
@@ -296,7 +318,7 @@ def generate_android_build(n: Writer, sln: Any) -> None:
         return
     try:
         fetch_third_party()
-    except (subprocess.CalledProcessError, OSError) as error:
+    except (subprocess.CalledProcessError, OSError, RuntimeError) as error:
         print(f"Android build disabled: cannot fetch musl/SDL3 ({error})", file=sys.stderr)
         return
     import json
